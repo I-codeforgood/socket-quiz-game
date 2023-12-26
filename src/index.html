@@ -1,0 +1,229 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quiz Game LeagueX</title>
+    <link rel="stylesheet" type="text/css" href="/styles.css">
+</head>
+
+<body>
+    <div class="main-section">
+        <h1>Welcome To The Quiz Game</h1>
+        <button id="create-button">Create room</button>
+        <h2 id="roomStatus"></h2>
+        <p id="roomId"></p>
+        <h2>Available Rooms</h2>
+        <ul id="roomList"></ul>
+        <div id="quizContainer">
+            <div id="quizInfoContainer" class="quiz-info"></div>
+            <div id="quizQuestionContainer" class="quiz-question"></div>
+            <div id="quizOptionsContainer" class="quiz-option"></div>
+            <div id="timer"></div>
+        </div>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let timerInterval;
+        let currentRoomId;
+        let hasCreatedRoom = false;
+        let hasJoinedRoom = false;
+
+        socket.on('connect', () => {
+            socket.emit('getRooms');
+            console.log('Connected to server');
+        });
+
+        socket.on('updateRooms', ({
+            rooms
+        }) => {
+            const roomList = document.getElementById('roomList');
+            roomList.innerHTML = '';
+
+            rooms.forEach((roomId) => {
+                const listItem = document.createElement('li');
+
+                const joinButton = document.createElement('button');
+                joinButton.textContent = `Join Room ${roomId}`;
+                joinButton.addEventListener('click', () => {
+                    currentRoomId = roomId
+                    socket.emit('joinRoom', roomId);
+                    socket.on('startGame', () => {
+                        console.log('Game Started!');
+                        startQuiz(roomId);
+                    });
+                });
+
+                listItem.appendChild(joinButton);
+                roomList.appendChild(listItem);
+            });
+
+            const roomStatus = document.getElementById('roomStatus');
+            const roomIdDisplay = document.getElementById('roomId');
+
+            if (hasCreatedRoom && !hasJoinedRoom) {
+                roomStatus.textContent = 'Room is created and waiting for other players to join';
+                roomIdDisplay.textContent = `Room ID: ${currentRoomId}`;
+            } else {
+                roomStatus.textContent = '';
+                roomIdDisplay.textContent = '';
+            }
+
+            const availableRoomsSection = document.getElementById('roomList');
+            availableRoomsSection.style.display = (hasCreatedRoom || hasJoinedRoom) ? 'none' : 'block';
+        });
+
+        let questionNumber = 0;
+
+        function createRoom() {
+            socket.emit('createRoom');
+            hasCreatedRoom = true;
+            document.getElementById('create-button').disabled = true;
+
+            socket.on('readyState', (roomId) => {
+                currentRoomId = roomId;
+                socket.on('startGame', () => {
+                    console.log('Game Started!');
+                    startCountdown(5, () => startQuiz(roomId));
+                });
+            });
+        }
+
+        function startCountdown(duration, callback) {
+            let countdown = duration;
+
+            timerInterval = setInterval(function() {
+                if (countdown > 0) {
+                    countdown--;
+                    document.getElementById('roomStatus').textContent = `Game starting in ${countdown} seconds`;
+                    document.getElementById('roomId').textContent = `Room ID: ${currentRoomId}`;
+                } else {
+                    clearInterval(timerInterval);
+                    document.getElementById('roomStatus').textContent = '';
+                    document.getElementById('roomId').textContent = '';
+                    callback();
+                }
+            }, 1000);
+        }
+
+        function startQuiz(roomId) {
+            hasJoinedRoom = true;
+            socket.emit('send-question', roomId);
+            socket.on('receive-question', async(data) => {
+                questionNumber++;
+                console.log('Received quiz data:', data);
+                await startTimer(10);
+                await updateUIWithQuestion(questionNumber, data.question, [data.option1, data.option2, data.option3, data.option4]);
+                if (questionNumber === 5) {
+                    socket.off('receive-question');
+                }
+
+                const optionButtons = document.querySelectorAll('.quiz-option');
+                optionButtons.forEach((button) => {
+                    button.disabled = false;
+                });
+
+                socket.once('submit-answer', (submittedAnswer) => {
+                    console.log('Answer submitted:', submittedAnswer);
+                });
+            });
+
+            finalScores();
+        }
+
+        function finalScores() {
+            socket.on('finalScores', (scores) => {
+                const quizOptionsContainer = document.getElementById('quizOptionsContainer');
+                const quizQuestionContainer = document.getElementById('quizQuestionContainer')
+                quizQuestionContainer.textContent = ''
+                const quizInfoContainer = document.getElementById('quizInfoContainer')
+                quizInfoContainer.textContent = ''
+                const finalScoresDiv = document.createElement('div');
+                finalScoresDiv.textContent = 'Game Over! Final Scores:';
+                finalScoresDiv.className = 'quiz-info';
+
+                const scoresList = document.createElement('ol');
+                for (const playerName in scores) {
+                    const scoreItem = document.createElement('li');
+                    const scoreLabel = playerName === socket.id ? `${playerName} (YOU)` : `${playerName} (OPPONENT)`;
+                    scoreItem.textContent = `${scoreLabel}: ${scores[playerName]} points`;
+                    scoresList.appendChild(scoreItem);
+                }
+
+                quizOptionsContainer.innerHTML = '';
+                quizOptionsContainer.appendChild(finalScoresDiv);
+                quizOptionsContainer.appendChild(scoresList);
+
+                document.getElementById('create-button').disabled = false;
+                hasCreatedRoom = false;
+                hasJoinedRoom = false;
+            });
+        }
+
+        async function updateUIWithQuestion(questionNumber, question, options) {
+            const infoDiv = document.createElement('div');
+            infoDiv.textContent = `Question ${questionNumber}`;
+            infoDiv.className = 'quiz-info';
+
+            const questionDiv = document.createElement('div');
+            questionDiv.textContent = `Question: ${question}`;
+            questionDiv.className = 'quiz-question';
+
+            const optionButtons = options.map((option, index) => {
+                const button = document.createElement('button');
+                button.textContent = option;
+                button.addEventListener('click', () => handleOptionClick(index));
+                button.className = 'quiz-option';
+                return button;
+            });
+
+            const quizInfoContainer = document.getElementById('quizInfoContainer');
+            const quizQuestionContainer = document.getElementById('quizQuestionContainer');
+            const quizOptionsContainer = document.getElementById('quizOptionsContainer');
+            const timerElement = document.getElementById('timer');
+
+            quizInfoContainer.innerHTML = '';
+            quizQuestionContainer.innerHTML = '';
+            quizOptionsContainer.innerHTML = '';
+            timerElement.textContent = '';
+
+            quizInfoContainer.appendChild(infoDiv);
+            quizQuestionContainer.appendChild(questionDiv);
+            optionButtons.forEach((button) => quizOptionsContainer.appendChild(button));
+        }
+
+        function handleOptionClick(optionIndex) {
+            console.log('Option clicked:', optionIndex + 1);
+            socket.emit('submit-answer', optionIndex + 1);
+            clearInterval(timerInterval);
+
+            const optionButtons = document.querySelectorAll('.quiz-option');
+            optionButtons.forEach((button) => {
+                button.disabled = true;
+            });
+        }
+
+        async function startTimer(duration) {
+            let timer = duration;
+            const timerElement = document.getElementById('timer');
+
+            timerInterval = setInterval(function() {
+                timerElement.textContent = `Time left: ${timer} seconds`;
+
+                if (--timer < 0) {
+                    clearInterval(timerInterval);
+                    timerElement.textContent = 'Time\'s up!';
+                }
+            }, 1000);
+        }
+
+        document.getElementById('create-button').addEventListener('click', createRoom);
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+        });
+    </script>
+</body>
+
+</html>
